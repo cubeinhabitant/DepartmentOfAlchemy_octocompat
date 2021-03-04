@@ -29,21 +29,23 @@
   #define DEBUG_PRINTLN(x)
 #endif
 
-volatile byte octo_stamp_buf = {8,2,0,2,6};
+volatile uint8_t octo_stamp_buf[5] = {8,2,0,2,6};
 
 void octo_media_ReportConfig() {
+  DEBUG_PRINTLN(F("octo_media_ReportConfig"));
   Serial.println(F("Media Type: Catalex MP3 Ambient + Scare"));
   Serial.println(F("Volume: 5"));
 }
 
 void octo_report_config() {
+  DEBUG_PRINTLN(F("octo_report_config"));
   Serial.print(F("OctoBanger TTL v"));
   for (int i = 0; i < 3; i++) {
     if (i < 2) {
-      Serial.print(octo_stamp_buf[i]]);
+      Serial.print(octo_stamp_buf[i]);
       Serial.print(F("."));
     } else {
-      Serial.println(octo_stamp_buf[i]]);
+      Serial.println(octo_stamp_buf[i]);
     }
   }
   Serial.println(F("Config OK"));
@@ -69,26 +71,37 @@ void octo_check_serial() {
   if (Serial.available()) {
     b = Serial.read();
     if (b == '@') {
-      delay(10);
-      if (Serial.available) {
+      DEBUG_PRINTLN(F("Command byte received"));
+      delay(5);
+      if (Serial.available()) {
         b = Serial.read();
+        delay(5);
         switch (b) {
           case 'V':
             // return version
+            DEBUG_PRINTLN(F("Version"));
             for (int i = 0; i < 3; i++) {
               if (i < 2) {
-                Serial.print(octo_stamp_buf[i]]);
+                Serial.print(octo_stamp_buf[i]);
                 Serial.print(F("."));
               } else {
-                Serial.println(octo_stamp_buf[i]]);
+                Serial.println(octo_stamp_buf[i]);
               }
             }
+            break;
+
           default:
+            DEBUG_PRINT(F("unknown char: "));
+            DEBUG_PRINTLN(b);
             Serial.print(F("unk char:"));
             Serial.println(b);
             while (Serial.read() >= 0); // clear any input
+            break;
         }
       }
+    } else {
+      DEBUG_PRINT(F("Not command byte received: "));
+      DEBUG_PRINTLN(b);
     }
   }
 }
@@ -98,16 +111,20 @@ void setup() {
 
 #ifdef DEBUG
   SerialUSB.begin(115200); // serial debug
-  while (!Serial); // wait for serial port to connect. Needed for native USB port only
+  while (!SerialUSB); // wait for serial port to connect. Needed for native USB port only
 #endif
 
-  DEBUG_PRINT("Department of Alchemy - octocompat");
+  DEBUG_PRINTLN(F("Department of Alchemy - octocompat"));
 
   Serial.println(F(".OBC"));
 
-  octo_media_ReportConfig();
+  octo_report_config();
 
   delay(1000);
+
+  Serial.println(F("Ready"));
+
+  DEBUG_PRINTLN(F("Setup complete"));
 }
 
 void loop() {
