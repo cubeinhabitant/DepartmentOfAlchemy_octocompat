@@ -34,21 +34,62 @@
 
 #define SD_SS 2
 
-File obcSequence;
-File obcConfig;
-bool obcConfigValid = true;
-
 #define OBC_CFG_FILENAME "OBC.CFG"
 #define OBC_SEQ_FILENAME "OBC.SEQ"
 
 #define CFG_LEN 9
 
+// obc config offset
+const uint16_t OBC_PIN_MAP_SLOT = 0;
+const uint16_t OBC_TTL_TYPES_SLOT = 1;
+const uint16_t OBC_MEDIA_TYPE_SLOT = 2;
+const uint16_t OBC_MEDIA_DELAY_SLOT = 3;
+const uint16_t OBC_RESET_DELAY_SLOT = 4;
+const uint16_t OBC_BOOT_DELAY_SLOT = 5;
+const uint16_t OBC_VOLUME_SLOT = 6;
+const uint16_t OBC_TRIGGER_TYPE_SLOT = 7;
+const uint16_t OBC_TIMING_OFFSET_TYPE_SLOT = 8;
+
+#define OBC_MEDIA_TYPE_NONE 0x0
+#define OBC_MEDIA_TYPE_CATALEX_SCARE 0x1
+#define OBC_MEDIA_TYPE_CATALEX_AMB_SCARE 0x2
+#define OBC_MEDIA_TYPE_SPRITE 0x3
+
+const uint8_t OBC_TRIGGER_PIN_COUNT = 3;
+uint8_t OBC_TRIGGER_PINS[OBC_TRIGGER_TYPE_SLOT] = {11, 10, 12};
+const uint8_t OBC_TIMING_OFFSET_TYPE_COUNT = 2;
+const float OBC_TIMING_OFFSETS[OBC_TIMING_OFFSET_TYPE_COUNT] = {-.405, 0};
 volatile uint8_t octo_stamp_buf[5] = {8,2,0,2,6};
+
+File obcSequence;
+volatile bool obcConfigValid = true;
+volatile uint8_t obcConfig[CFG_LEN];
+volatile uint16_t obcHiSample = 0x0000;
+volatile uint8_t obcTriggerType = 0x1;
+volatile uint8_t obcPinMap = 0x0;
+volatile uint8_t obcResetDelaySecs = 30;
+volatile uint8_t obcBootDelaySecs = 0x0;
+volatile uint8_t obcVolume = 22;
+volatile uint8_t obcMediaType = 0x0;
+volatile uint8_t obcMediaDelay = 0x0;
+volatile uint8_t obcTimingOffsetType = 0x0;
 
 void octo_media_ReportConfig() {
   DEBUG_PRINTLN(F("octo_media_ReportConfig"));
-  Serial.println(F("Media Type: Catalex MP3 Ambient + Scare"));
-  Serial.println(F("Volume: 5"));
+  Serial.print(F("Media Type: "));
+  switch (obcMediaType) {
+  case OBC_MEDIA_TYPE_NONE: Serial.println(F("None")); break;
+  case OBC_MEDIA_TYPE_CATALEX_SCARE: Serial.println(F("Catalex MP3 Scare Only")); break;
+  case OBC_MEDIA_TYPE_CATALEX_AMB_SCARE: Serial.println(F("Catalex MP3 Ambient + Scare")); break;
+  case OBC_MEDIA_TYPE_SPRITE: Serial.println(F("Sprite Video")); break;
+  default: Serial.println(F("Unknown!")); return;
+  }
+  Serial.print(F("Volume: "));
+  Serial.println(obcVolume);
+  if (obcMediaDelay != 0) {
+    Serial.print(F("Media Delay: "));
+    Serial.println(obcMediaDelay);
+  }
 }
 
 void octo_report_config() {
@@ -62,21 +103,55 @@ void octo_report_config() {
       Serial.println(octo_stamp_buf[i]);
     }
   }
-  Serial.println(F("Config OK"));
-  Serial.println(F("Frame Count: 0"));
+  if (obcConfigValid) {
+    Serial.println(F("Config OK"));
+  } else {
+    Serial.println(F("Config NOT FOUND, using defaults"));
+  }
+  Serial.print(F("Frame Count: "));
+  Serial.println(obcHiSample);
+
   Serial.println(F("Seq Len Secs: 0"));
-  Serial.println(F("Reset Delay Secs: 30"));
-  Serial.println(F("Pin Map: Default_TTL"));
+  Serial.print(F("Reset Delay Secs: "));
+  Serial.println(obcResetDelaySecs);
+  if (obcBootDelaySecs != 0) {
+    Serial.print(F("Boot Delay Secs: "));
+    Serial.println(obcBootDelaySecs);
+  }
+  Serial.print(F("Pin Map: "));
+  switch(obcPinMap) {
+  case 0x0:
+    Serial.println(F("Default_TTL"));
+    break;
+  case 0x1:
+    Serial.println(F("Shield"));
+    break;
+  case 0x2:
+    Serial.println(F("Custom"));
+    break;
+  case 0x3:
+    Serial.println(F("Unknown"));
+    break;
+  }
   delay(300);
-  Serial.println(F("Trigger Pin in: 11"));
-  Serial.println(F("Trigger Ambient Type: Hi (to gnd trigger)"));
-  Serial.println(F("Trigger Pin Out: 10"));
-  Serial.println(F("Media Serial Pin: 12"));
+  Serial.print(F("Trigger Pin in: "));
+  Serial.println(OBC_TRIGGER_PINS[0]);
+  Serial.print(F("Trigger Ambient Type: "));
+  if (obcTriggerType == 0) {
+    Serial.println(F("Low (PIR or + trigger)"));
+  } else {
+    Serial.println(F("Hi (to gnd trigger)"));
+  }
+  Serial.print(F("Trigger Pin Out: "));
+  Serial.println(OBC_TRIGGER_PINS[1]);
+  Serial.print(F("Media Serial Pin: "));
+  Serial.println(OBC_TRIGGER_PINS[2]);
   delay(300);
   octo_media_ReportConfig();
-  Serial.println(F("Timing Offset ms: -.405"));
-  Serial.println(F("TTL PINS: 23456789"));
-  Serial.println(F("TTL TYPES: 11111111"));
+  Serial.print(F("Timing Offset ms: "));
+  Serial.println(OBC_TIMING_OFFSETS[obcTimingOffsetType], 3);
+  Serial.println(F("TTL PINS: 23456789")); // TODO: implement
+  Serial.println(F("TTL TYPES: 11111111")); // TODO: implement
 }
 
 void octo_check_serial() {
@@ -144,14 +219,13 @@ void octo_check_serial() {
           case 'U':
             // upload config
             DEBUG_PRINTLN(F("Upload config"));
-            octo_receiveConfig();
+            octo_rx_controller_config();
             break;
 
           case 'P':
             // ping back config
-            DEBUG_PRINTLN(F("Not implemented: P - ping back config"));
-            Serial.println(F("Not implemented: P - ping back config"));
-            flushReceive();
+            DEBUG_PRINTLN(F("Ping back config"));
+            octo_report_config();
             break;
 
           case 'T':
@@ -169,10 +243,13 @@ void octo_check_serial() {
             break;
 
           case 'O':
-            // stamp OK
-            DEBUG_PRINTLN(F("Not implemented: O - stamp OK"));
-            Serial.println(F("Not implemented: O - stamp OK"));
-            flushReceive();
+            // config (stamp) OK
+            DEBUG_PRINTLN(F("Config (stamp) OK"));
+            if (obcConfigValid) {
+              Serial.println(F("OK"));
+            } else {
+              Serial.println(F("NO"));
+            }
             break;
 
           default:
@@ -201,9 +278,6 @@ void setup() {
 
   DEBUG_PRINTLN(F("Department of Alchemy - octocompat"));
 
-  // let computer know we are listening
-  Serial.println(F(".OBC"));
-
   DEBUG_PRINTLN(F("Initializing SD card..."));
 
   if (!SD.begin(SD_SS)) {
@@ -211,6 +285,11 @@ void setup() {
     while (1);
   }
   DEBUG_PRINTLN(F("initialization done."));
+
+  octo_read_config();
+
+  // let computer know we are listening
+  Serial.println(F(".OBC"));
 
   octo_report_config();
 
@@ -243,9 +322,11 @@ uint16_t readInt16() {
   return (uint16_t)(((uint16_t)b[1] << 8) | b[0]);
 }
 
-void octo_receiveConfig() {
+void octo_rx_controller_config() {
   uint8_t b;
   uint16_t len;
+  File obcConfigFile;
+
   while (Serial.available() == 0) {}
 
   len = readInt16();
@@ -260,8 +341,8 @@ void octo_receiveConfig() {
   if (SD.exists(OBC_CFG_FILENAME)) {
     SD.remove(OBC_CFG_FILENAME);
   }
-  obcConfig = SD.open(OBC_CFG_FILENAME, FILE_WRITE);
-  if (!obcConfig) {
+  obcConfigFile = SD.open(OBC_CFG_FILENAME, FILE_WRITE);
+  if (!obcConfigFile) {
     Serial.print(F("Unabled to open config file for writing: "));
     Serial.println(OBC_CFG_FILENAME);
     return;
@@ -281,7 +362,7 @@ void octo_receiveConfig() {
       }
     }
     b = Serial.read();
-    obcConfig.write(b);
+    obcConfigFile.write(b);
   }
 
   Serial.print(F("Received "));
@@ -291,15 +372,15 @@ void octo_receiveConfig() {
 
   // write 8 reserved bytes
   for (uint8_t i = 0; i < 8; i++) {
-    obcConfig.write((uint8_t)0x00);
+    obcConfigFile.write((uint8_t)0x00);
   }
 
   // write stamp
   for (uint8_t i = 0; i < 5; i++) {
-    obcConfig.write(octo_stamp_buf[i]);
+    obcConfigFile.write(octo_stamp_buf[i]);
   }
 
-  obcConfig.close();
+  obcConfigFile.close();
 
   if (!obcConfigValid) {
     // clear any sequence file if the config data is not valid
@@ -308,9 +389,92 @@ void octo_receiveConfig() {
     }
   }
 
+  octo_read_config();
+
+  // TODO: initialize firmware based on translation of config values
+}
+
+void octo_read_config() {
+  File obcFile;
+  uint8_t b;
+
+  DEBUG_PRINTLN(F("octo_read_config"));
+
+  obcConfigValid = false;
+
+  if (!SD.exists(OBC_CFG_FILENAME)) {
+    DEBUG_PRINTLN(F("config file not found on SD card"));
+    return;
+  }
+
+  obcFile = SD.open(OBC_CFG_FILENAME, FILE_READ);
+  if (!obcFile) {
+    Serial.print(F("Unabled to open config file for writing: "));
+    Serial.println(OBC_CFG_FILENAME);
+    return;
+  }
+
+  if (obcFile.size() != (CFG_LEN + 8 + 5)) {
+    Serial.print(F("Unexpected config file size: "));
+    Serial.println(obcFile.size());
+    return;
+  }
+
+  // read config
+  for (uint8_t i = 0; i < CFG_LEN; i++) {
+    obcConfig[i] = obcFile.read();
+  }
+
+  // read 8 reserved bytes
+  for (uint8_t i = 0; i < 8; i++) {
+    obcFile.read();
+  }
+
+  // read stamp
+  for (uint8_t i = 0; i < 5; i++) {
+    b = obcFile.read();
+    if (b != octo_stamp_buf[i]) {
+      Serial.print(F("Unexpected stamp["));
+      Serial.print(i);
+      Serial.print(F("]: "));
+      Serial.print(b);
+      break;
+    }
+  }
+  // got this far, the config is valid
   obcConfigValid = true;
 
-  // OBF would now execute read_config to intialize variables based on the
-  // config data.
-  // TODO: initialize firmware based on translation of config values
+  obcFile.close();
+
+  // initialize configuration based values
+  obcPinMap = obcConfig[OBC_PIN_MAP_SLOT];
+  // TODO: OBC_TTL_TYPES_SLOT;
+  obcMediaType = obcConfig[OBC_MEDIA_TYPE_SLOT];
+  obcMediaDelay = obcConfig[OBC_MEDIA_DELAY_SLOT];
+  obcResetDelaySecs = obcConfig[OBC_RESET_DELAY_SLOT];
+  obcBootDelaySecs = obcConfig[OBC_BOOT_DELAY_SLOT];
+  obcVolume = obcConfig[OBC_VOLUME_SLOT];
+  obcTriggerType = obcConfig[OBC_TRIGGER_TYPE_SLOT];
+  obcTimingOffsetType = obcConfig[OBC_TIMING_OFFSET_TYPE_SLOT];
+
+  if (obcTimingOffsetType > OBC_TIMING_OFFSET_TYPE_COUNT - 1) {
+    obcTimingOffsetType = 0x0;
+  }
+
+  // check to see if there is a sequence file. if so, find out how big it is
+  if (!SD.exists(OBC_SEQ_FILENAME)) {
+    obcHiSample = 0x0000;
+    return;
+  }
+
+  obcFile = SD.open(OBC_SEQ_FILENAME, FILE_READ);
+  if (obcFile.size() < 2) {
+    obcHiSample = 0x0000;
+  } else {
+    obcHiSample = obcFile.read();
+    obcHiSample = obcHiSample << 8;
+    obcHiSample = obcHiSample | obcFile.read();
+  }
+
+  obcFile.close();
 }
