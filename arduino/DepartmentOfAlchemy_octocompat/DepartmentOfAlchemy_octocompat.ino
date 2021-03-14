@@ -59,12 +59,15 @@ const uint8_t OBC_TRIGGER_PIN_COUNT = 3;
 uint8_t OBC_TRIGGER_PINS[OBC_TRIGGER_TYPE_SLOT] = {11, 10, 12};
 const uint8_t OBC_TIMING_OFFSET_TYPE_COUNT = 2;
 const float OBC_TIMING_OFFSETS[OBC_TIMING_OFFSET_TYPE_COUNT] = {-.405, 0};
+volatile float OBC_MILLIS_PER_FRAME = 50.0; // 49.595; // default is 20 frames per sec (50ms each)
 volatile uint8_t octo_stamp_buf[5] = {8,2,0,2,6};
 
 File obcSequence;
 volatile bool obcConfigValid = true;
 volatile uint8_t obcConfig[CFG_LEN];
-volatile uint16_t obcHiSample = 0x0000;
+// OBC calls this "hi_sample". Uses it to tell how much of the eeprom is
+// in use. We can just call it sequence file size (in bytes) / 2.
+volatile uint16_t obcFrameCount = 0x0000;
 volatile uint8_t obcTriggerType = 0x1;
 volatile uint8_t obcPinMap = 0x0;
 volatile uint8_t obcResetDelaySecs = 30;
@@ -109,7 +112,7 @@ void octo_report_config() {
     Serial.println(F("Config NOT FOUND, using defaults"));
   }
   Serial.print(F("Frame Count: "));
-  Serial.println(obcHiSample);
+  Serial.println(obcFrameCount);
 
   Serial.println(F("Seq Len Secs: 0"));
   Serial.print(F("Reset Delay Secs: "));
@@ -211,9 +214,8 @@ void octo_check_serial() {
 
           case 'S':
             // receive sequence data
-            DEBUG_PRINTLN(F("Not implemented: S - upload sequence data"));
-            Serial.println(F("Not implemented: S - upload sequence data"));
-            flushReceive();
+            DEBUG_PRINTLN(F("Receive sequence data"));
+            octo_rx_seq_data();
             break;
 
           case 'U':
@@ -320,6 +322,65 @@ uint16_t readInt16() {
   }
   
   return (uint16_t)(((uint16_t)b[1] << 8) | b[0]);
+}
+
+void octo_rx_seq_data() {
+  uint8_t b;
+  uint16_t len;
+  File obcSequenceFile;
+  float duration = 0;
+
+  while (Serial.available() == 0) {}
+
+  len = readInt16();
+
+  if (SD.exists(OBC_SEQ_FILENAME)) {
+    SD.remove(OBC_SEQ_FILENAME);
+  }
+  obcSequenceFile = SD.open(OBC_SEQ_FILENAME, FILE_WRITE);
+  if (!obcSequenceFile) {
+    Serial.print(F("Unabled to open sequence file for writing: "));
+    Serial.println(OBC_SEQ_FILENAME);
+    return;
+  }
+
+  // max of arduino uno/nano based octobanger is 1000 bytes
+  // so they all fit in the arduino eeprom
+  for (uint16_t i = 0; i < len && i < 1000; i++) {
+    uint16_t count = 0;
+    while (Serial.available() == 0) {
+      count++;
+      if (count > 0xFFFE) {
+        Serial.print(F("Stuck on: "));
+        Serial.println(i);
+        Serial.println("Upload terminated, please retry");
+        return;
+      }
+    }
+    b = Serial.read();
+    obcSequenceFile.write(b);
+
+    // calcuting the duration while receiving
+    if ((i % 2) == 1) {
+      duration += (float)(b) * OBC_MILLIS_PER_FRAME;
+    }
+  }
+
+  obcSequenceFile.close();
+
+  obcFrameCount = len / 2;
+  Serial.print(F("received "));
+  Serial.print(obcFrameCount);
+  Serial.println(F(" frames"));
+
+  delay(300);
+
+  Serial.print(F("Seq Len Secs: "));
+  Serial.println(duration / 1000.0);
+
+  // TODO: initialize firmware based on translation of config values
+
+  Serial.println(F("Saved, Ready"));
 }
 
 void octo_rx_controller_config() {
@@ -463,18 +524,12 @@ void octo_read_config() {
 
   // check to see if there is a sequence file. if so, find out how big it is
   if (!SD.exists(OBC_SEQ_FILENAME)) {
-    obcHiSample = 0x0000;
+    obcFrameCount = 0x0000;
     return;
   }
 
   obcFile = SD.open(OBC_SEQ_FILENAME, FILE_READ);
-  if (obcFile.size() < 2) {
-    obcHiSample = 0x0000;
-  } else {
-    obcHiSample = obcFile.read();
-    obcHiSample = obcHiSample << 8;
-    obcHiSample = obcHiSample | obcFile.read();
-  }
+  obcFrameCount = obcFile.size() / 2;
 
   obcFile.close();
 }
